@@ -1,0 +1,55 @@
+export default async function handler(req, res) {
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+  if (!process.env.DEEPSEEK_API_KEY) {
+    return res.status(503).json({ error: "DEEPSEEK_API_KEY is not configured" });
+  }
+
+  try {
+    const context = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+    let prompt = `You are the narrative director of a realistic Chinese football career simulation.
+Write in Simplified Chinese. Create one detailed, novel-like event for this player. The event must be believable for the stated age, height, weight, club, league, position, current attributes, identity, and recent history. Do not claim invented real-world transfer news as fact. Avoid melodrama and keep the consequences proportionate.
+
+Write like grounded sports fiction: open with a specific physical detail from the ground, tunnel, gym, or dressing room; put the player under a concrete tactical or personal pressure; let a coach, teammate, or opponent reveal an opposing point of view through action or dialogue; and end at the point where a decision has a real cost. Make the position and body type materially affect the scene. Do not use generic praise, generic training montages, or empty motivational slogans. The choices must represent distinct football philosophies such as disciplined improvement, calculated risk, team responsibility, or individual ambition. Remember earlier choices and let them shape how staff and teammates see the player.
+
+Return only valid JSON, with no Markdown fences. Its exact top-level shape must be {"title":string,"text":string,"choices":array}. The text must be 2-4 Chinese paragraphs separated by \n\n. choices must contain exactly 4 objects, each shaped as {"t":string,"d":string,"effect":object,"form":number,"rep":number,"fit":number}. Each choice must be distinct, concise, and have a trade-off. effect may only use PAC, SHO, PAS, DRI, DEF, PHY as keys and each effect value must be between -2 and 3. form must be -2 to 3, rep must be -3 to 4, and fit must be -8 to 5.
+
+Player context:
+${JSON.stringify(context)}`;
+
+    if (context.mode === "custom") {
+      prompt = `You are a strict, realistic evaluator for a Chinese football career simulation. Write in Simplified Chinese. Assess the player's custom decision using their age, height, weight, position, club, league, identity, attributes, current event, and recent history. The impact must be proportional: do not reward implausible actions, and acknowledge trade-offs. Explain the immediate consequence through a concrete football detail and make the decision reinforce or challenge the player's established identity.
+
+Return only valid JSON, with no Markdown fences. Use exactly this shape: {"effect":object,"form":number,"rep":number,"fit":number,"outcome":string}. effect may only use PAC, SHO, PAS, DRI, DEF, PHY as keys and each value must be between -2 and 3. form must be -2 to 3, rep must be -3 to 4, fit must be -8 to 5. outcome is a detailed 2-3 sentence Chinese consequence written in a grounded novel-like tone.
+
+Player context:
+${JSON.stringify(context)}
+
+Custom decision:
+${context.customChoice}`;
+    }
+
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+        temperature: 0.85,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: "You produce strictly valid JSON for a football career simulator." },
+          { role: "user", content: prompt }
+        ]
+      })
+    });
+    if (!response.ok) return res.status(response.status).json({ error: "DeepSeek request failed", detail: await response.text() });
+    const result = await response.json();
+    const content = result.choices?.[0]?.message?.content;
+    if (!content) throw new Error("DeepSeek returned no event content");
+    return res.status(200).json(JSON.parse(content));
+  } catch (error) {
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Unexpected error" });
+  }
+}
